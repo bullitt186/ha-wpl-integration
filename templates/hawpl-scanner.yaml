@@ -1,0 +1,69 @@
+esphome:
+    name: heatingpump
+    platform: ESP32
+    board: esp32dev
+  
+# Enable logging
+logger:
+  level: INFO
+  logs:
+    main_text: NONE
+
+  
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "1cSivcBYHZBouiCgueZtgbwR0cBoKPVc48JNhvXK6JI="
+
+ota:
+  password: "f0e6110663e3bef67846f076d7e4db81"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Heatingpump Fallback Hotspot"
+    password: "AsBl9n46jlOx"
+
+captive_portal:
+    
+globals:
+###GLOBALS###
+
+sensor:
+###SENSOR###
+
+
+text_sensor:
+###TEXT_SENSOR###
+
+binary_sensor:
+###BINARY_SENSOR###
+
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+    on_time:
+      - seconds: /180
+        then:
+
+
+spi:
+  id: McpSpi
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+
+canbus:
+  - platform: mcp2515
+    id: my_mcp2515
+    spi_id: McpSpi
+    cs_pin: GPIO17
+    can_id: 700
+    use_extended_id: false
+    bit_rate: 20kbps
+    on_frame:
+
+###CANBUS###

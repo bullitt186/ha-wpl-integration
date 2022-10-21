@@ -1,61 +1,71 @@
-#include <Arduino.h>
+// MCP2515 - ESP32
+//    SCK  - IO18
+//    SI   - IO23
+//    SO   - IO19
+//    CS   - IO5
+//    Vcc  - 5V ! Der ESP32 hat 5V-feste Eingänge
+//    GND  - GND
+//
+// http://henrysbench.capnfatz.com/henrys-bench/arduino-projects-tips-and-more/arduino-can-bus-module-1st-network-tutorial/
+// CAN Receive Example der Bibliothek https://github.com/coryjfowler/MCP_CAN_lib
 #include <mcp_can.h>
 #include <SPI.h>
 
-long unsigned int rxId;
-unsigned char len = 0;
-unsigned char rxBuf[8];
-const int spiCSPin = 17;
-byte data[8] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+MCP_CAN CAN0(5); // Set CS pin
 
-MCP_CAN CAN0(spiCSPin);     // Set CS to pin GPIO17
+char msgString[128]; // Serial Output String Buffer
+const int LEDpin = 13;
 
-
-void setup() {
+void setup()
+{
   Serial.begin(115200);
+  delay(3000);
+  pinMode(LEDpin, OUTPUT);
 
-  // Initialize MCP2515 running at 16MHz with a baudrate of 500kb/s and the masks and filters disabled.
-  if(CAN0.begin(MCP_ANY, CAN_20KBPS, MCP_16MHZ) == CAN_OK) Serial.println("MCP2515 Initialized Successfully!");
-  else Serial.println("Error Initializing MCP2515...");
-
-  CAN0.setMode(MCP_NORMAL);   // Change to normal mode to allow messages to be transmitted
-
-  Serial.println("MCP2515 Library Receive Example...");
-
-}
-
-
-void sendCanMsg() {
-  // send data:  ID = 0x100, Standard CAN Frame, Data length = 8 bytes, 'data' = array of data bytes to send
-  byte sndStat = CAN0.sendMsgBuf(0x100, 0, 8, data);
-  if(sndStat == CAN_OK){
-    Serial.println("Message Sent Successfully!");
-  } else {
-    Serial.println("Error Sending Message...");
+  while (CAN_OK != CAN0.begin(MCP_ANY, CAN_20KBPS, MCP_8MHZ)) // init can bus : masks and filters disabled, baudrate, Quarz vom MCP2551
+  {
+    Serial.println("CAN BUS Shield init fail");
+    Serial.println(" Init CAN BUS Shield again");
+    delay(100);
   }
+  Serial.println("CAN BUS Shield init ok!");
+  CAN0.setMode(MCP_NORMAL); // Change to normal mode to allow messages to be transmitted
 }
 
-void readCanMsg() {
+void loop()
+{
+  unsigned long rxId = 0;
+  byte len = 0;
+  byte rxBuf[8];
 
-    if(CAN_MSGAVAIL == CAN0.checkReceive())
-    {
-        //CAN0.readMsgBuf(&len, buf);
-        CAN0.readMsgBuf(&rxId, &len, rxBuf);      // Read data: len = data length, buf = data byte(s)
+  if (CAN_MSGAVAIL == CAN0.checkReceive()) // check if data coming
+  {
+    CAN0.readMsgBuf(&rxId, &len, rxBuf); // Read data: len = data length, buf = data byte(s)
+    Serial.println("-----------------------------");
+    if ((rxId & 0x80000000) == 0x80000000) // Determine if ID is standard (11 bits) or extended (29 bits)
+      sprintf(msgString, "Extended ID: 0x%.8lX  DLC: %1d  Data:", (rxId & 0x1FFFFFFF), len);
+    else
+      sprintf(msgString, "Standard ID: 0x%.3lX       DLC: %1d  Data:", rxId, len);
 
-        Serial.println("-----------------------------");
-        Serial.print("Data from ID: 0x");
-        Serial.println(rxId, HEX);
+    Serial.print(msgString);
 
-        for(int i = 0; i<len; i++)
-        {
-            Serial.print(rxBuf[i]);
-            Serial.print("\t");
-        }
-        Serial.println();
+    if ((rxId & 0x40000000) == 0x40000000)
+    { // Determine if message is a remote request frame.
+      sprintf(msgString, " REMOTE REQUEST FRAME");
+      Serial.print(msgString);
     }
-}
-
-void loop() {
-  sendCanMsg();
-  readCanMsg();
+    else
+    {
+      for (byte i = 0; i < len; i++)
+      {
+        sprintf(msgString, " 0x%.2X", rxBuf[i]);
+        Serial.print(msgString);
+        if (i == 2)
+        {
+          digitalWrite(LEDpin, rxBuf[i] % 2);
+        }
+      }
+    }
+    Serial.println();
+  }
 }

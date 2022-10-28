@@ -1,0 +1,1725 @@
+# This ESPHome Sketch has proven to work on my (bullitt168's) setup
+
+esphome:
+    name: heatingpump
+    platform: ESP32
+    board: esp32dev
+  
+# Enable logging
+logger:
+  level: INFO
+  logs:
+    main_text: NONE
+
+  
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "1cSivcBYHZBouiCgueZtgbwR0cBoKPVc48JNhvXK6JI="
+
+  services:
+    - service: pull_canmsg
+      variables:
+        idx: int
+        addr: int
+        val: int
+      then:
+        - lambda: |-
+            int getA = static_cast<int>(addr); //Adresse in Byte 0 u. 1 schreiben
+            id(sh_state)[0]=getA>>8;
+            id(sh_state)[1]=getA-((getA>>8)<<8);
+
+            getA = static_cast<int>(idx); //Elster-Index übernehmen
+            //Wenn Elster-Index <= 0xff => an Byte-Stelle 2 schreiben
+            if( (getA>>8) == 0x00) {
+              id(sh_state)[2]=getA-((getA>>8)<<8);
+
+              getA = static_cast<int>(val); //Datenwert übernehmen und an Stelle 3 u. 4 schreiben, 5 u. 6 ist 0x00
+              id(sh_state)[3]=getA>>8;
+              id(sh_state)[4]=getA-((getA>>8)<<8);
+              id(sh_state)[5]=0x00;
+              id(sh_state)[6]=0x00;
+            }
+            else {
+              //Wenn Elster-Index > 0xff kommt 0xfa an Stelle 2, der Index steht dann an Stelle 3 u. 4
+              id(sh_state)[2]=0xfa;
+              id(sh_state)[3]=getA>>8;
+              id(sh_state)[4]=getA-((getA>>8)<<8);
+
+              getA = static_cast<int>(val); //der Datenwert steht dann an Stelle 5 u. 6
+              id(sh_state)[5]=getA>>8;
+              id(sh_state)[6]=getA-((getA>>8)<<8);
+            }
+
+
+ota:
+  password: "f0e6110663e3bef67846f076d7e4db81"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Heatingpump Fallback Hotspot"
+    password: "AsBl9n46jlOx"
+
+captive_portal:
+    
+globals:
+  # Client CAN ID and Response ID must match.
+  - id: client_can_id
+    type: int
+    restore_value: no
+    initial_value: "700"
+  - id: resp_id_1
+    type: char
+    restore_value: no
+    initial_value: '0xe2'
+  - id: resp_id_2
+    type: char
+    restore_value: no
+    initial_value: '0x00'
+
+  # Request IDs for Kessel (ID 180)
+  - id: kessel_can_id
+    type: int
+    restore_value: no
+    initial_value: "180"
+  - id: req_id_kessel_1
+    type: char
+    restore_value: no
+    initial_value: '0x31'
+  - id: req_id_kessel_2
+    type: char
+    restore_value: no
+    initial_value: '0x00'
+
+  # Request IDs for Heizmodul (ID 500)
+  - id: heizmodul_can_id
+    type: int
+    restore_value: no
+    initial_value: "500"
+  - id: req_id_heizmodul_1
+    type: char
+    restore_value: no
+    initial_value: '0xa1'
+  - id: req_id_heizmodul_2
+    type: char
+    restore_value: no
+    initial_value: '0x00'
+
+  # Request IDs for Manager (ID 480)
+  - id: manager_can_id
+    type: int
+    restore_value: no
+    initial_value: "480"
+  - id: req_id_manager_1
+    type: char
+    restore_value: no
+    initial_value: '0x91'
+  - id: req_id_manager_2
+    type: char
+    restore_value: no
+    initial_value: '0x00'
+
+
+#Array zum Senden von Can-Bus Befehl aus Home-Assistant
+  - id: sh_state
+    type: int[7]
+    initial_value: '{0x00,0x00,0x00,0x00,0x00,0x00,0x00}'
+    restore_value: no
+#Array zum Senden von Can-Bus Befehl aus Programmcode
+  - id: send_state
+    type: int[7]
+    initial_value: '{0x00,0x00,0x00,0x00,0x00,0x00,0x00}'
+    restore_value: no
+
+  - id: el_aufnahmeleistung_ww_tag_wh_float
+    type: float
+    restore_value: no
+  - id: el_aufnahmeleistung_ww_tag_wh_flag
+    type: bool
+    restore_value: no
+  - id: el_aufnahmeleistung_ww_tag_kwh
+    type: float
+    restore_value: no
+  - id: el_aufnahmeleistung_ww_tag_kwh_flag
+    type: bool
+    restore_value: no
+  - id: el_aufnahmeleistung_heiz_tag_wh_float
+    type: float
+    restore_value: no
+  - id: el_aufnahmeleistung_heiz_tag_wh_flag
+    type: bool
+    restore_value: no
+  - id: el_aufnahmeleistung_heiz_tag_kwh
+    type: float
+    restore_value: no
+  - id: el_aufnahmeleistung_heiz_tag_kwh_flag
+    type: bool
+    restore_value: no 
+  - id: el_aufnahmeleistung_ww_total_kWh_float
+    type: float
+    restore_value: no
+  - id: el_aufnahmeleistung_ww_total_kWh_flag
+    type: bool
+    restore_value: no
+  - id: el_aufnahmeleistung_ww_total_mWh
+    type: float
+    restore_value: no
+  - id: el_aufnahmeleistung_ww_total_mWh_flag
+    type: bool
+    restore_value: no
+  - id: el_aufnahmeleistung_heiz_total_kWh_float
+    type: float
+    restore_value: no
+  - id: el_aufnahmeleistung_heiz_total_kWh_flag
+    type: bool
+    restore_value: no
+  - id: el_aufnahmeleistung_heiz_total_mWh
+    type: float
+    restore_value: no
+
+    
+  - id: volumenstrom_float
+    type: float
+    restore_value: no
+
+  - id: el_aufnahmeleistung_heiz_total_mWh_flag
+    type: bool
+    restore_value: no
+
+  - id: VD_starts_h
+    type: int
+    initial_value: '0'
+    restore_value: no
+
+  - id: VD_starts_t
+    initial_value: '0'
+    type: float
+    restore_value: no
+
+  - id: waermemertrag_ww_tag_wh_float
+    type: float
+    restore_value: no
+  - id: waermemertrag_ww_tag_wh_flag
+    type: bool
+    restore_value: no
+  - id: waermemertrag_ww_tag_kwh
+    type: float
+    restore_value: no
+  - id: waermemertrag_ww_tag_kwh_flag
+    type: bool
+    
+  - id: waermemertrag_electr_ww_tag_wh_float
+    type: float
+    restore_value: no
+  - id: waermemertrag_electr_ww_tag_wh_flag
+    type: bool
+    restore_value: no
+  - id: waermemertrag_electr_ww_tag_kwh
+    type: float
+    restore_value: no
+  - id: waermemertrag_electr_ww_tag_kwh_flag
+    type: bool    
+    restore_value: no
+
+  - id: waermemertrag_heiz_tag_wh_float
+    type: float
+    restore_value: no
+  - id: waermemertrag_heiz_tag_wh_flag
+    type: bool
+    restore_value: no
+  - id: waermemertrag_heiz_tag_kwh
+    type: float
+    restore_value: no
+  - id: waermemertrag_heiz_tag_kwh_flag
+    type: bool
+    restore_value: no 
+
+  - id: waermemertrag_electr_heiz_tag_wh_float
+    type: float
+    restore_value: no
+  - id: waermemertrag_electr_heiz_tag_wh_flag
+    type: bool
+    restore_value: no
+  - id: waermemertrag_electr_heiz_tag_kwh
+    type: float
+    restore_value: no
+  - id: waermemertrag_electr_heiz_tag_kwh_flag
+    type: bool
+    restore_value: no 
+
+  - id: waermemertrag_ww_total_kWh_float
+    type: float
+    restore_value: no
+  - id: waermemertrag_ww_total_kWh_flag
+    type: bool
+    restore_value: no
+  - id: waermemertrag_ww_total_mWh
+    type: float
+    restore_value: no
+  - id: waermemertrag_ww_total_mWh_flag
+    type: bool
+    restore_value: no
+
+  - id: waermemertrag_heiz_total_kWh_float
+    type: float
+    restore_value: no
+  - id: waermemertrag_heiz_total_kWh_flag
+    type: bool
+    restore_value: no
+  - id: waermemertrag_heiz_total_mWh
+    type: float
+    restore_value: no
+  - id: waermemertrag_heiz_total_mWh_flag
+    type: bool
+    restore_value: no
+
+  - id: waermemertrag_electr_heiz_total_kWh_float
+    type: float
+    restore_value: no
+  - id: waermemertrag_electr_heiz_total_kWh_flag
+    type: bool
+    restore_value: no
+  - id: waermemertrag_electr_heiz_total_mWh
+    type: float
+    restore_value: no
+  - id: waermemertrag_electr_heiz_total_mWh_flag
+    type: bool
+    restore_value: no
+
+  - id: waermemertrag_electr_ww_total_kWh_float
+    type: float
+    restore_value: no
+  - id: waermemertrag_electr_ww_total_kWh_flag
+    type: bool
+    restore_value: no
+  - id: waermemertrag_electr_ww_total_mWh
+    type: float
+    restore_value: no
+  - id: waermemertrag_electr_ww_total_mWh_flag
+    type: bool
+    restore_value: no
+
+  - id: programmschalter_string
+    type: std::string
+    restore_value: no
+    initial_value: '"Unbekannt"'
+
+
+
+#Abfrage des Sensorstatus durch Ausführen des Lambda-Befehls. send_state wird auf das request-Paket gesetzt. Anschließend wird Update_sensor aktiviert, der den Befehl via CAN absetzt und wieder deaktiviert
+sensor:
+  - platform: template
+    name: "Außentemperatur"
+    id: temperature_outside
+    unit_of_measurement: "°C"
+    icon: "mdi:thermometer-lines"
+    device_class: "temperature"
+    state_class: "measurement"
+    accuracy_decimals: 1
+    lambda: |-
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x00;id(send_state)[4]=0x0c;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return {};
+    update_interval: 10min
+
+
+  - platform: template
+    name: "Quellentemperatur"
+    id: temperature_source
+    unit_of_measurement: "°C"
+    icon: "mdi:thermometer-lines"
+    device_class: "temperature"
+    state_class: "measurement"
+    accuracy_decimals: 1
+    lambda: |-
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x01;id(send_state)[4]=0xd4;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return {};
+    update_interval: 10min
+    
+
+
+  - platform: template
+    name: "Warmwassertemperatur"
+    id: temperature_water
+    unit_of_measurement: "°C"
+    icon: "mdi:thermometer-lines"
+    device_class: "temperature"
+    state_class: "measurement"
+    accuracy_decimals: 1
+    lambda: |-
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0x0e;id(send_state)[3]=0x01;id(send_state)[4]=0x00;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return {};
+    update_interval: 10min
+
+#In Planung
+#  - platform: template
+#    name: "WW_Programmstart"
+#    id: ww_start
+#    icon: "mdi:timer-play"
+#    state_class: "measurement"
+#    accuracy_decimals: 0
+
+#In Planung
+#  - platform: template
+#    name: "WW_Programmende"
+#    id: ww_ende
+#    icon: "mdi:timer-stop"
+#    state_class: "measurement"
+#    accuracy_decimals: 0
+
+
+
+
+#Berechnung COP erfolgt über Sensoren für Stromverbrauch und Wärmeproduktion - kein aktiver Update-Befehl
+
+  - platform: template
+    name: "Verdichterstarts"
+    id: VD_starts
+    unit_of_measurement: "a.u."
+    icon: "mdi:chart-bell-curve-cumulative"
+    device_class: "power_factor"
+    state_class: "measurement"
+    lambda: |-
+      
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x07;id(send_state)[4]=0x1c;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+    
+    
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x07;id(send_state)[4]=0x1d;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+
+      if (id(VD_starts_t>0) and id(VD_starts_h>0)){
+        float VD_starts_float = id(VD_starts_h)+id(VD_starts_t);
+        return VD_starts_float;
+      }
+      else {return {};}
+    update_interval: 5h
+    accuracy_decimals: 0
+
+
+
+
+
+  - platform: template
+    name: "COP-Wert Heizung"
+    id: cop_heater
+    unit_of_measurement: "a.u."
+    icon: "mdi:chart-bell-curve-cumulative"
+    device_class: "power_factor"
+    state_class: "measurement"
+    accuracy_decimals: 2
+    lambda: |-
+      id(total_electric_energy_heating).update();
+      id(total_heating_energy).update();
+      id(total_electric_heating_energy).update();
+      float heat_cop_float = (id(waermemertrag_heiz_total_mWh)+id(waermemertrag_electr_heiz_total_mWh))/id(el_aufnahmeleistung_heiz_total_mWh);
+      return heat_cop_float;
+    force_update: true
+
+
+  - platform: template
+    name: "COP-Wert Warmwasser"
+    id: cop_water
+    unit_of_measurement: "a.u."
+    icon: "mdi:chart-bell-curve-cumulative"
+    device_class: "power_factor"
+    state_class: "measurement"
+    accuracy_decimals: 2
+    lambda: |-
+      id(total_heating_energy_water).update();
+      id(total_electric_energy_water).update();
+      id(total_heating_energy_water).update();
+      float ww_cop_float = (id(waermemertrag_ww_total_mWh)+id(waermemertrag_electr_ww_total_mWh))/id(el_aufnahmeleistung_ww_total_mWh);
+      return ww_cop_float;
+    force_update: true
+    
+  - platform: template
+    name: "COP-Wert Gesamt"
+    id: cop_total
+    unit_of_measurement: "a.u."
+    icon: "mdi:chart-bell-curve-cumulative"
+    device_class: "power_factor"
+    state_class: "measurement"
+    accuracy_decimals: 2
+    lambda: |-
+      id(cop_water).update();
+      id(cop_heater).update();
+      float total_cop_float = ((id(waermemertrag_heiz_total_mWh)+id(waermemertrag_electr_heiz_total_mWh))+(id(waermemertrag_ww_total_mWh)+id(waermemertrag_electr_ww_total_mWh)))/(id(el_aufnahmeleistung_heiz_total_mWh)+id(el_aufnahmeleistung_ww_total_mWh));
+      return total_cop_float;
+    force_update: true
+    update_interval: 6h
+
+
+
+
+  - platform: template
+    name: "Rücklauftemperatur Heizung"
+    id: temperature_return
+    unit_of_measurement: "°C"
+    icon: "mdi:waves-arrow-left"
+    device_class: "temperature"
+    state_class: "measurement"
+    accuracy_decimals: 1
+    lambda: |-
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x00;id(send_state)[4]=0x16;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(manager_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return {};
+    update_interval: 5min
+
+
+
+
+
+
+  - platform: template
+    name: "T Heizkreis IST"
+    id: t_heizkreis_ist
+    unit_of_measurement: "°C"
+    icon: "mdi:waves-arrow-right"
+    device_class: "temperature"
+    state_class: "measurement"
+    accuracy_decimals: 1
+    lambda: |-
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x02;id(send_state)[4]=0xca;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return {};
+    update_interval: 5min
+
+
+    
+  - platform: template
+    name: "T Heizkreis Soll"
+    id: t_heizkreis_soll
+    unit_of_measurement: "°C"
+    icon: "mdi:waves-arrow-left"
+    device_class: "temperature"
+    state_class: "measurement"
+    accuracy_decimals: 1
+    lambda: |-
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x01;id(send_state)[4]=0xd7;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return {};
+    update_interval: 15min
+
+
+  - platform: template
+    name: "Speicher Soll Temperatur"
+    id: t_ww_soll
+    unit_of_measurement: "°C"
+    icon: "mdi:thermometer-water"
+    device_class: "temperature"
+    state_class: "measurement"
+    accuracy_decimals: 1
+    lambda: |-
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0x03;id(send_state)[3]=0x00;id(send_state)[4]=0x00;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return {};
+    update_interval: 15min
+
+
+
+
+
+
+  - platform: template
+    name: "Speicher IST Temperatur"
+    id: t_ww_ist
+    unit_of_measurement: "°C"
+    icon: "mdi:thermometer-lines"
+    device_class: "temperature"
+    state_class: "measurement"
+    accuracy_decimals: 1
+
+
+
+
+  - platform: template
+    name: "Eco Speicher Soll Temperatur"
+    id: ww_temp_eco_log
+    unit_of_measurement: "°C"
+    icon: "mdi:thermometer-low"
+    device_class: "temperature"
+    state_class: "measurement"
+    accuracy_decimals: 1
+    lambda: |-
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x0a;id(send_state)[4]=0x06;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return {};
+    update_interval: 10min
+
+
+
+
+  - platform: template
+    name: "Komfort Speicher Soll Temperatur"
+    id: ww_temp_komfort_log
+    unit_of_measurement: "°C"
+    icon: "mdi:thermometer-high"
+    device_class: "temperature"
+    state_class: "measurement"
+    accuracy_decimals: 1
+    lambda: |-
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0x13;id(send_state)[3]=0x00;id(send_state)[4]=0x00;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return {};
+    update_interval: 10min
+
+
+
+
+  - platform: template
+    name: "Volumenstrom"
+    id: volumenstrom_log
+    unit_of_measurement: "l/min"
+    icon: "mdi:waves-arrow-right"
+    state_class: "measurement"
+    accuracy_decimals: 2
+    lambda: |-
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x01;id(send_state)[4]=0xda;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return {};
+    update_interval: 5min
+
+
+
+  - platform: template
+    name: "Heizungsdruck"
+    id: heizungsdruck_log
+    unit_of_measurement: "bar"
+    icon: "mdi:gauge"
+    device_class: "pressure"
+    state_class: "measurement"
+    accuracy_decimals: 2
+    lambda: |-
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0x1f;id(send_state)[3]=0x00;id(send_state)[4]=0x00;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return {};
+    update_interval: 5min
+
+
+
+
+  - platform: template
+    name: "Puffertemperatur"
+    id: puffertemperatur_log
+    unit_of_measurement: "°C"
+    icon: "mdi:thermometer-high"
+    device_class: "temperature"
+    state_class: "measurement"
+    accuracy_decimals: 1
+
+
+#Automatische Updates durch FEK
+  - platform: template
+    name: "Luftfeuchtigkeit Wohnraum"
+    id: humidity_inside
+    unit_of_measurement: "%rH"
+    icon: "mdi:water-percent"
+    device_class: "humidity"
+    state_class: "measurement"
+    accuracy_decimals: 1
+
+
+  - platform: template
+    name: "Temperatur Wohnraum"
+    id: temperature_inside
+    unit_of_measurement: "°C"
+    icon: "mdi:thermometer-lines"
+    device_class: "temperature"
+    state_class: "measurement"
+    accuracy_decimals: 1
+    
+
+
+
+  - platform: template
+    name: "Stromverbrauch Warmwasser heute"
+    id: daily_electric_energy_water
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "measurement"
+    accuracy_decimals: 3
+    icon: "mdi:transmission-tower"
+    lambda: |-
+      //el. Leistungsaufnahme WW Tag Wh
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x1a;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      
+      //el. Leistungsaufnahme WW Tag kWh
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x1b;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      if (id(el_aufnahmeleistung_ww_tag_kwh_flag) and id(el_aufnahmeleistung_ww_tag_wh_flag)){
+        id(el_aufnahmeleistung_ww_tag_kwh) += id(el_aufnahmeleistung_ww_tag_wh_float);
+        float daily_electric_energy_water=id(el_aufnahmeleistung_ww_tag_kwh);
+        id(el_aufnahmeleistung_ww_tag_kwh_flag)=false;
+        id(el_aufnahmeleistung_ww_tag_wh_flag)=false;
+        return daily_electric_energy_water;
+        }
+      else{return {};}
+    update_interval: 15min
+
+  - platform: template
+    name: "WM Heizung heute"
+    id: daily_heating_energy
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    icon: "mdi:water-boiler"
+    state_class: "measurement"
+    accuracy_decimals: 3
+    lambda: |-
+      //WM Heizen Tag wh
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x2e;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      
+      //WM Heizen Tag kwh
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x2f;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      if (id(waermemertrag_heiz_tag_kwh_flag) and id(waermemertrag_heiz_tag_wh_flag)){
+        id(waermemertrag_heiz_tag_kwh) += id(waermemertrag_heiz_tag_wh_float);
+        float daily_heating_energy=id(waermemertrag_heiz_tag_kwh);
+        id(waermemertrag_heiz_tag_kwh_flag)=false;
+        id(waermemertrag_heiz_tag_wh_flag)=false;
+        return daily_heating_energy;
+        }
+        else {
+          return {};
+        }
+    update_interval: 15min
+
+
+  - platform: template
+    name: "Stromverbrauch Heizung heute"
+    id: daily_electric_energy_heating
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "measurement"
+    icon: "mdi:transmission-tower"
+    accuracy_decimals: 3   
+    lambda: |-
+      //el. Leistungsaufnahme Heizen Tag Wh
+      id(send_state)[0]=id(req_id_heizmodul_1);id(send_state)[1]=id(req_id_heizmodul_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x1e;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(heizmodul_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      
+      //el. Leistungsaufnahme Heizen Tag kWh
+      id(send_state)[0]=id(req_id_heizmodul_1);id(send_state)[1]=id(req_id_heizmodul_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x1f;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(heizmodul_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      if (id(el_aufnahmeleistung_heiz_tag_kwh_flag) and id(el_aufnahmeleistung_heiz_tag_wh_flag)){
+        id(el_aufnahmeleistung_heiz_tag_kwh) += id(el_aufnahmeleistung_heiz_tag_wh_float);
+        float daily_electric_energy_heating=id(el_aufnahmeleistung_heiz_tag_kwh);
+        id(el_aufnahmeleistung_heiz_tag_kwh_flag)=false;
+        id(el_aufnahmeleistung_heiz_tag_wh_flag)=false;
+        return daily_electric_energy_heating;
+      }
+      else{return {};}
+    update_interval: 6h
+
+
+  - platform: template
+    name: "WM Warmwasser heute"
+    id: daily_heating_energy_water
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    icon: "mdi:water-boiler"
+    state_class: "measurement"
+    accuracy_decimals: 3
+    lambda: |-
+      id(send_state)[0]=id(req_id_heizmodul_1);id(send_state)[1]=id(req_id_heizmodul_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x2a;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(heizmodul_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      
+      id(send_state)[0]=id(req_id_heizmodul_1);id(send_state)[1]=id(req_id_heizmodul_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x2b;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(heizmodul_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      if (id(waermemertrag_ww_tag_kwh_flag) and id(waermemertrag_ww_tag_wh_flag)){
+      id(waermemertrag_ww_tag_kwh) += id(waermemertrag_ww_tag_wh_float);
+      float daily_heating_energy_water=id(waermemertrag_ww_tag_kwh);
+      id(waermemertrag_ww_tag_kwh_flag)=false;
+      id(waermemertrag_ww_tag_wh_flag)=false;
+      return daily_heating_energy_water;
+      }
+      else{ return {};
+      }
+    update_interval: 15min
+
+
+  - platform: template
+    name: "Stromverbrauch Warmwasser total"
+    id: total_electric_energy_water
+    unit_of_measurement: "MWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    icon: "mdi:transmission-tower"
+    accuracy_decimals: 3
+    lambda: |-
+      //el. Leistungsaufnahme WW Summe kwh
+      id(send_state)[0]=id(req_id_heizmodul_1);id(send_state)[1]=id(req_id_heizmodul_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x1c;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(heizmodul_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      
+      //el. Leistungsaufnahme WW Summe Mwh
+      id(send_state)[0]=id(req_id_heizmodul_1);id(send_state)[1]=id(req_id_heizmodul_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x1d;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(heizmodul_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      if (id(el_aufnahmeleistung_ww_total_mWh_flag) and id(el_aufnahmeleistung_ww_total_kWh_flag)){
+        id(el_aufnahmeleistung_ww_total_mWh) += id(el_aufnahmeleistung_ww_total_kWh_float);
+        float total_electric_energy_water=id(el_aufnahmeleistung_ww_total_mWh);
+        id(el_aufnahmeleistung_ww_total_mWh_flag)=false;
+        id(el_aufnahmeleistung_ww_total_kWh_flag)=false;
+        return total_electric_energy_water;
+        }
+      else {  return {};}
+
+
+  - platform: template
+    name: "Stromverbrauch Heizung total"
+    id: total_electric_energy_heating
+    unit_of_measurement: "MWh"
+    device_class: "energy"
+    icon: "mdi:transmission-tower"
+    state_class: "total_increasing"
+    accuracy_decimals: 3
+    lambda: |-
+      //el. Leistungsaufnahme Heizen Summe kwh
+      id(send_state)[0]=id(req_id_heizmodul_1);id(send_state)[1]=id(req_id_heizmodul_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x20;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(heizmodul_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      
+      //el. Leistungsaufnahme Heizen Summe Mwh
+      id(send_state)[0]=id(req_id_heizmodul_1);id(send_state)[1]=id(req_id_heizmodul_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x21;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(heizmodul_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      if (id(el_aufnahmeleistung_heiz_total_mWh_flag) and id(el_aufnahmeleistung_heiz_total_kWh_flag)){
+        id(el_aufnahmeleistung_heiz_total_mWh) += id(el_aufnahmeleistung_heiz_total_kWh_float);
+        float total_electric_energy_heating=id(el_aufnahmeleistung_heiz_total_mWh);
+        id(el_aufnahmeleistung_heiz_total_mWh_flag)=false;
+        id(el_aufnahmeleistung_heiz_total_mWh_flag)=false;
+        return total_electric_energy_heating;
+        }
+      else {return {};
+        
+      }
+
+
+
+  - platform: template
+    name: "WM Heizen total"
+    id: total_heating_energy
+    unit_of_measurement: "MWh"
+    device_class: "energy"
+    icon: "mdi:water-boiler"
+    state_class: "total_increasing"
+    accuracy_decimals: 3
+    lambda: |-
+      //WM Heizen Summe kwh
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x30;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      
+      //WM Heizen Summe Mwh
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x31;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+
+      //Überprüfung ob beide Leistungswerte empfangen wurden
+      if (id(waermemertrag_heiz_total_kWh_flag) and id(waermemertrag_heiz_total_mWh_flag)){
+        id(waermemertrag_heiz_total_mWh) += id(waermemertrag_heiz_total_kWh_float);
+        float total_heating_energy=id(waermemertrag_heiz_total_mWh);
+        id(waermemertrag_heiz_total_kWh_flag)=false;
+        id(waermemertrag_heiz_total_mWh_flag)=false;
+        return total_heating_energy;
+        }
+      else {
+        return {};
+      }
+
+
+  - platform: template
+    name: "WM Warmwasser total"
+    id: total_heating_energy_water
+    unit_of_measurement: "MWh"
+    device_class: "energy"
+    icon: "mdi:water-boiler"
+    state_class: "total_increasing"
+    accuracy_decimals: 3
+    lambda: |-
+      //WM WW Summe kwh
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x2c;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      
+      //WM WW Summe Mwh
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x2d;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      //Überprüfung ob beide Leistungswerte empfangen wurden
+      if (id(waermemertrag_ww_total_mWh_flag) and id(waermemertrag_ww_total_kWh_flag)){
+        id(waermemertrag_ww_total_mWh) += id(waermemertrag_ww_total_kWh_float);
+        float total_heating_energy_water=id(waermemertrag_ww_total_mWh);
+        id(waermemertrag_ww_total_mWh_flag)=false;
+        id(waermemertrag_ww_total_kWh_flag)=false;
+        return total_heating_energy_water;
+        }
+      else {
+        return {};
+        
+      }
+
+
+  - platform: template
+    name: "WM elektr. Warmwasser total"
+    id: total_electric_heating_energy_water
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    icon: "mdi:water-boiler"
+    state_class: "total_increasing"
+    accuracy_decimals: 3
+    lambda: |-
+      //WM NE WW Summe kwh
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x24;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      
+      //WM NE WW Summe MWh
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x25;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      
+      //Überprüfung ob beide Leistungswerte empfangen wurden
+      if (id(waermemertrag_electr_ww_total_mWh_flag) and id(waermemertrag_electr_ww_total_kWh_flag)){
+        id(waermemertrag_electr_ww_total_mWh) += id(waermemertrag_electr_ww_total_kWh_float);
+        float total_electric_heating_energy_water=id(waermemertrag_electr_ww_total_mWh);
+        id(waermemertrag_electr_ww_total_mWh_flag)=false;
+        id(waermemertrag_electr_ww_total_kWh_flag)=false;
+        return total_electric_heating_energy_water;
+      }
+      else {
+        return {};
+        
+      }
+
+
+  - platform: template
+    name: "WM elektr. heizen total"
+    id: total_electric_heating_energy
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    icon: "mdi:water-boiler"
+    state_class: "total_increasing"
+    accuracy_decimals: 3
+    lambda: |-
+      //WM NE Heizen Summe kWh
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x28;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      
+      //WM NE Heizen Summe MWh
+      id(send_state)[0]=id(req_id_kessel_1);id(send_state)[1]=id(req_id_kessel_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x09;id(send_state)[4]=0x29;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      
+      //Überprüfung ob beide Leistungswerte empfangen wurden
+      if (id(waermemertrag_electr_heiz_total_kWh_flag) and id(waermemertrag_electr_heiz_total_mWh_flag)){
+        id(waermemertrag_electr_heiz_total_mWh) += id(waermemertrag_electr_heiz_total_kWh_float);
+        float total_electric_heating_energy=id(waermemertrag_electr_heiz_total_mWh);
+        id(waermemertrag_electr_heiz_total_kWh_flag)=false;
+        id(waermemertrag_electr_heiz_total_mWh_flag)=false;
+        return total_electric_heating_energy;
+      }
+
+      else {
+        return {};
+        
+      }
+
+#EVU Sperre
+  - platform: template
+    name: "EVU Sperre"
+    id: evu_lock
+    lambda: |-
+      id(send_state)[0]=id(req_id_manager_1);id(send_state)[1]=id(req_id_manager_2);id(send_state)[2]=0xfa;id(send_state)[3]=0xfd;id(send_state)[4]=0xac;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(manager_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return {};
+    update_interval: 10min
+
+
+
+#ECO Betrieb
+  - platform: template
+    name: "Eco Betrieb"
+    id: eco_betrieb
+    state_class: "measurement"
+    lambda: |-
+      id(send_state)[0]=id(req_id_manager_1);id(send_state)[1]=id(req_id_manager_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x01;id(send_state)[4]=0x18;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(manager_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return {};
+    update_interval: 10min
+
+#ECO Ein Aus
+  - platform: template
+    name: "Eco Ein Aus"
+    id: eco_ein_aus
+    state_class: "measurement"
+    lambda: |-
+      id(send_state)[0]=id(req_id_manager_1);id(send_state)[1]=id(req_id_manager_2);id(send_state)[2]=0x6c;id(send_state)[3]=0x00;id(send_state)[4]=0x00;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(manager_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return {};
+    update_interval: 10min
+
+#Party Ein Aus
+  - platform: template
+    name: "Party Ein Aus"
+    id: party_ein_aus
+    state_class: "measurement"
+    lambda: |-
+      id(send_state)[0]=id(req_id_manager_1);id(send_state)[1]=id(req_id_manager_2);id(send_state)[2]=0x6b;id(send_state)[3]=0x00;id(send_state)[4]=0x00;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(manager_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return {};
+    update_interval: 10min
+
+#Sensor zum verändern der Warmwasser-Komfort-Temperatur
+  - platform: homeassistant
+    entity_id: sensor.komfort_speicher_soll_temperatur_setpoint
+    id: id_komfort_speicher_soll_temperatur_setpoint
+    filters:
+      - lambda: |-
+          int setpoint = (int) x;
+          if (0 > setpoint && setpoint > 60) {
+            //Einfache Abfrage der Temperatur durchführen, falls keine gültiger Setpoint gegeben wurde   
+            id(send_state)[0]=0x31;
+            id(send_state)[1]=0x00;
+            id(send_state)[2]=0x13;
+            id(send_state)[3]=0x00;
+            id(send_state)[4]=0x00;
+            id(send_state)[5]=0x00;
+            id(send_state)[6]=0x00;
+            return x;
+          } else {
+            //Wenn Setpoint gültig war, Daten für Übertragung an Heizung bereit machen
+            setpoint *= 10; // Setpoint ist scheinbar dreistellig xxx = xx.x °C
+            id(send_state)[0]=0x30;
+            id(send_state)[1]=0x00;
+            id(send_state)[2]=0x13;
+            id(send_state)[3]=setpoint>>8;
+            id(send_state)[4]=setpoint-((setpoint>>8)<<8);
+            id(send_state)[5]=0x00;
+            id(send_state)[6]=0x00;
+            return x;
+          }
+    on_value:
+        then:
+        - lambda: |-
+            //Daten senden
+            ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+            id(update_sensor).publish_state(true);
+            id(update_sensor).publish_state(false);
+
+#Sensor zum verändern der Warmwasser-Eco-Temperatur
+  - platform: homeassistant
+    entity_id: sensor.eco_speicher_soll_temperatur_setpoint
+    id: id_eco_speicher_soll_temperatur_setpoint
+    filters:
+      - lambda: |-
+          int setpoint = (int) x;
+          if (0 > setpoint && setpoint > 60) {
+            //Einfache Abfrage der Temperatur durchführen, falls keine gültiger Setpoint gegeben wurde   
+            id(send_state)[0]=0x31;
+            id(send_state)[1]=0x00;
+            id(send_state)[2]=0xfa;
+            id(send_state)[3]=0x0a;
+            id(send_state)[4]=0x06;
+            id(send_state)[5]=0x00;
+            id(send_state)[6]=0x00;
+            return x;
+          } else {
+            //Wenn Setpoint gültig war, Daten für Übertragung an Heizung bereit machen
+            setpoint *= 10; // Setpoint ist scheinbar dreistellig xxx = xx.x °C
+            id(send_state)[0]=0x30;
+            id(send_state)[1]=0x00;
+            id(send_state)[2]=0xfa;
+            id(send_state)[3]=0x0a;
+            id(send_state)[4]=0x06;
+            id(send_state)[5]=setpoint>>8;
+            id(send_state)[6]=setpoint-((setpoint>>8)<<8);
+            return x;
+          }
+    on_value:
+        then:
+        - lambda: |-
+            //Daten senden
+            ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(kessel_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+            id(update_sensor).publish_state(true);
+            id(update_sensor).publish_state(false);
+
+
+text_sensor:
+  - platform: template
+    name: "Programmschalter"
+    id: programmschalter
+    lambda: |-
+      id(send_state)[0]=id(req_id_manager_1);id(send_state)[1]=id(req_id_manager_2);id(send_state)[2]=0xfa;id(send_state)[3]=0x01;id(send_state)[4]=0x12;id(send_state)[5]=0x00;id(send_state)[6]=0x00;
+      ESP_LOGI("canmsg", "SEND;%d;%02x %02x %02x %02x %02x %02x %02x", id(manager_can_id), id(send_state)[0], id(send_state)[1], id(send_state)[2], id(send_state)[3], id(send_state)[4], id(send_state)[5], id(send_state)[6]);
+      id(update_sensor).publish_state(true);
+      id(update_sensor).publish_state(false);
+      return id(programmschalter_string);
+    update_interval: 10min
+
+binary_sensor:
+#Sensor zum Senden von CAN-Befehlen aus Lambda-Routinen
+  - platform: template
+    id: update_sensor
+    on_press:
+      then:
+        - canbus.send: 
+            data: !lambda
+              return {(uint8_t) id(send_state)[0],(uint8_t) id(send_state)[1],(uint8_t) id(send_state)[2],(uint8_t) id(send_state)[3], (uint8_t) id(send_state)[4],(uint8_t) id(send_state)[5],(uint8_t) id(send_state)[6]};
+            can_id: 0x700
+            
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+    on_time:
+      - seconds: /180
+        then:
+
+
+button:
+#Button für CAN-Befehl im Log anzeigen - CAN-Befehl aus Home-Assistant-Dienst - es wird dabei kein Signal an den CAN-Bus gesendet; Führt auch erstmaliges refresh einzelner Sensoren aus
+  - platform: template
+    name: "Befehl anzeigen / Sensorupdate"
+    id: can_befehl_anzeigen
+    on_press:
+      then:      
+        lambda: |-
+          id(VD_starts).update();
+          id(cop_total).update();
+          //ESP_LOGI("main", "Value of my hex_sensor: %02x, %02x, %02x, %02x, %02x, %02x, %02x", id(sh_state)[0],id(sh_state)[1],id(sh_state)[2],id(sh_state)[3],id(sh_state)[4],id(sh_state)[5],id(sh_state)[6]);
+
+#Button für CAN-Befehl absetzen - CAN-Befehl aus Home-Assistant-Dienst wird an CAN-Bus übermittelt
+  - platform: template
+    name: CAN-Befehl absetzen
+    id: can_send
+    # Optional variables:
+    icon: "mdi:emoticon-outline"
+    on_press:
+      then:
+        - canbus.send: 
+            data: !lambda
+              return {(uint8_t) id(sh_state)[0],(uint8_t) id(sh_state)[1],(uint8_t) id(sh_state)[2],(uint8_t) id(sh_state)[3], (uint8_t) id(sh_state)[4],(uint8_t) id(sh_state)[5],(uint8_t) id(sh_state)[6]};
+            can_id: 0x700
+
+  
+
+#WW_Programm
+
+#          - canbus.send:
+#              data: [ 0x31, 0x00, 0xfa,0x17,0xa0,0x00,0x00 ]
+#              can_id: 0x700
+#          - delay: 500ms
+
+#  { "HEISSGAS_TEMP"                                    , 0x0265, et_dec_val}, ok
+#          - canbus.send:
+#              data: [ 0x31, 0x00, 0xfa,0x02,0x65,0x00,0x00 ]
+#              can_id: 0x700
+#          - delay: 500ms
+
+#Warmwasser Betriebsmodus Abfrage: - ok 1/10
+#          - canbus.send:
+#              data: [ 0x31, 0x00, 0xfa,0x01,0x12,0x00,0x00 ]
+#              can_id: 0x700
+#          - delay: 500ms
+
+
+spi:
+  id: McpSpi
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+
+canbus:
+  - platform: mcp2515
+    id: my_mcp2515
+    spi_id: McpSpi
+    cs_pin: GPIO5
+    can_id: 700
+    use_extended_id: false
+    bit_rate: 20kbps
+    on_frame:
+
+
+#Verdichter Starts 1 000er
+    - can_id: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0xfa and x[3]==0x07 and x[4]==0x1c) {
+                float VD_x =float((int16_t((x[6])+( (x[5])<<8))))*1000;
+                id(VD_starts_t)=VD_x;
+                //ESP_LOGI("main", "Verdichter Starts 1000 empfangen: %f", VD_x);
+              }
+
+#Verdichter Starts 100er              
+    - can_id: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0xfa and x[3]==0x07 and x[4]==0x1d) {
+                int VD_x =((int16_t((x[6])+( (x[5])<<8))));
+                id(VD_starts_h)=VD_x;
+                //ESP_LOGI("main", "Verdichter Starts 100 empfangen: %i", VD_x);
+              }
+
+#T Heizkreis WW Komfort Soll Wert
+    - can_id: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0x13) {
+              float temperature =(float((int16_t((x[4])+( (x[3])<<8))))/10);
+              id(ww_temp_komfort_log).publish_state(temperature);
+              //ESP_LOGI("main", "T Komfort Soll empfangen: %f", temperature);
+            }
+#Volumenstrom (l/min)
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0xfa and x[3]==0x01 and x[4]==0xda) {
+              float current =(float((int16_t((x[6])+( (x[5])<<8))))/100);
+              id(volumenstrom_log).publish_state(current);
+              id(volumenstrom_float)=current;
+              //ESP_LOGI("main", "l/min Volumenstrom empfangen: %f", current);
+            }
+
+#Heizungsdruck (bar)
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0x1f) {
+              float pressure =(float((int16_t((x[3])+( (x[4])<<8))))/100);
+              id(heizungsdruck_log).publish_state(pressure);
+              //ESP_LOGI("main", "bar Heizungsdruck empfangen: %f", pressure);
+            }
+
+#Heizungsdruck (bar)
+#        - lambda: |-
+#            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0xfa and x[3]==0x06 and x[4]==0x74) {
+#              float pressure =(float((int16_t((x[6])+( (x[5])<<8))))/100);
+#              id(heizungsdruck_log).publish_state(pressure);
+#              //ESP_LOGI("main", "bar Heizungsdruck empfangen: %f", pressure);
+#            }
+
+#T Puffertemperatur
+        - lambda: |-
+            if(x[0]==0x22 and x[1]==0x00 and x[2]==0x0e) {
+              float temperature =(float((int16_t((x[4])+( (x[3])<<8))))/10);
+              id(puffertemperatur_log).publish_state(temperature);
+              //ESP_LOGI("main", "T Puffertemperatur empfangen: %f", temperature);
+            }
+
+
+#T Heizkreis WW Eco Soll Abfrage
+    - can_id: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[3]==0x0a and x[4]==0x06) {
+              float temperature =(float((int16_t((x[6])+( (x[5])<<8))))/10);
+              id(ww_temp_eco_log).publish_state(temperature);
+              //ESP_LOGI("main", "T Eco Soll empfangen: %f", temperature);
+            }
+
+
+#T Heizkreis IST Abfrage
+    - can_id: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[3]==0x02 and x[4] == 0xca) {
+              float temperature =(float((int16_t((x[6])+( (x[5])<<8))))/10);
+              id(t_heizkreis_ist).publish_state(temperature);
+              //ESP_LOGI("main", "T Heizkreis IST empfangen: %f", temperature);
+            }
+#T Heizkreis Soll Abfrage
+    - can_id: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[3]==0x01 and x[4] == 0xd7) {
+              float temperature =(float((int16_t((x[6])+( (x[5])<<8))))/10);
+              id(t_heizkreis_soll).publish_state(temperature);
+              //ESP_LOGI("main", "T Heizkreis Soll empfangen: %f", temperature);
+            }
+#T WW Soll Abfrage
+    - can_id: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0x03) {
+              float temperature =(float((int16_t((x[4])+( (x[3])<<8))))/10);
+              id(t_ww_soll).publish_state(temperature);
+              //ESP_LOGI("main", "T Warmwasser Soll empfangen: %f", temperature);
+            }
+
+
+#Warmwasser-Temperaturabfrage + Gerätespezifischer Offset 3.9 °C
+    - can_id: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[3]==0x00 and x[4] == 0x0e) {
+              float temperature =(float((int16_t((x[6])+( (x[5])<<8))))/10)+3.9;
+              id(temperature_water).publish_state(temperature);
+              //ESP_LOGI("main", "Warmwasser-Temperature empfangen: %f", temperature);
+            }
+            
+#Quellen-Temperatur
+    - can_id: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[3]==0x01 and x[4] == 0xd4) {
+              float temperature =float((int16_t((x[6])+( (x[5])<<8))))/10;
+              id(temperature_source).publish_state(temperature);
+              //ESP_LOGI("main", "Quellen-Temperature received: %f", temperature);
+            }
+
+#Speicher IST-temperatur
+    - can_id: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0x0e) {
+              float temperature =float((int16_t((x[4])+( (x[3])<<8))))/10;
+              id(t_ww_ist).publish_state(temperature);
+              //ESP_LOGI("main", "Speicher-Temperature received: %f", temperature);
+            }
+
+#Rücklauftemperatur
+    - can_id: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[3]==0x00 and x[4] == 0x16) {
+              float temperature =float((int16_t((x[6])+( (x[5])<<8))))/10;
+              id(temperature_return).publish_state(temperature);
+              //ESP_LOGI("main", "Rücklauf-Temperature received: %f", temperature);
+            }
+
+
+#Außentemperatur
+#float temperature =float(float((int((x[6])+( (x[5])<<8))))/10);
+    - can_id: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[3]==0x00 and x[4] == 0x0c) {
+              float temperature =float((int16_t((x[6])+( (x[5])<<8))))/10;
+              id(temperature_outside).publish_state(temperature);
+              //ESP_LOGI("main", "Aussen-Temperature received: %f", temperature);
+            }
+
+
+#EVU Lock
+    - can_id: 0x480
+      then:
+      - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0xfa and x[3]==0xfd and x[4] == 0xac) {
+              //ESP_LOGI("main", "EVU Sperre is %02x %02x %02x %02x %02x %02x %02x", x[0], x[1], x[2], x[3], x[4], x[5], x[6]);
+              if(x[5]==0x80 and x[6]==0x00){
+                id(evu_lock).publish_state(true);
+                }
+              else{
+                id(evu_lock).publish_state(false);
+              }
+            }
+
+#Programmschalter
+    - can_id: 0x480
+      then:
+      - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0xfa and x[3]==0x01 and x[4] == 0x12) {
+              //ESP_LOGI("main", "Programmschalter is %02x %02x %02x %02x %02x %02x %02x", x[0], x[1], x[2], x[3], x[4], x[5], x[6]);
+              switch(x[5]) {
+                case 0: id(programmschalter_string) = "Notbetrieb"; break;
+                case 1: id(programmschalter_string) = "Bereitschaft"; break;
+                case 2: id(programmschalter_string) = "Automatik"; break;
+                case 3: id(programmschalter_string) = "Tagbetrieb"; break;
+                case 4: id(programmschalter_string) = "Absenkbetrieb"; break;
+                case 5: id(programmschalter_string) = "Warmwasser"; break;
+                default: id(programmschalter_string) = x[5]; break;
+              }
+            }
+
+#ECO_Betrieb
+    - can_id: 0x480
+      then:
+      - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0xfa and x[3]==0x01 and x[4] == 0x18) {
+              //ESP_LOGI("main", "ECO-Betrieb is %02x %02x %02x %02x %02x %02x %02x", x[0], x[1], x[2], x[3], x[4], x[5], x[6]);
+              id(eco_betrieb).publish_state(x[5]);
+            }
+
+#ECO_Ein_Aus
+    - can_id: 0x480
+      then:
+      - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0x6c) {
+              //ESP_LOGI("main", "ECO_Ein_Aus is %02x %02x %02x %02x %02x %02x %02x", x[0], x[1], x[2], x[3], x[4], x[5], x[6]);
+              id(eco_ein_aus).publish_state(x[3]);
+            }
+
+#Party_Ein_Aus
+    - can_id: 0x480
+      then:
+      - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0x6b) {
+              //ESP_LOGI("main", "Party_Ein_Aus is %02x %02x %02x %02x %02x %02x %02x", x[0], x[1], x[2], x[3], x[4], x[5], x[6]);
+              id(party_ein_aus).publish_state(x[3]);
+            }
+
+
+#Luftfeuchtigkeit FEK mitlesen
+    - can_id: 0x301
+      then:
+        - lambda: |-
+            if(x[0]==0xc0 and x[1]==0x01 and x[2]==0x75) {
+              float humidity =float(float((int16_t((x[4])+( (x[3])<<8))))/10);
+              id(humidity_inside).publish_state(humidity);
+              //ESP_LOGI("main", "Humidity received: %f", humidity);
+            }
+#Raumtemperatur FEK mitlesen
+    - can_id: 0x301
+      then:
+        - lambda: |-
+            if(x[0]==0xc0 and x[1]==0x01 and x[2]==0x11) {
+              float temperature =float((int16_t((x[4])+( (x[3])<<8))))/10;
+              id(temperature_inside).publish_state(temperature);
+              //ESP_LOGI("main", "Raum-Temperature received: %f", temperature);
+            }
+
+
+
+#Elektrische Leistungsaufnahme Wh /kWh
+    - can_id: 0x500 #Original: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0xfa and x[3]==0x09) {
+              if (x[4]==0x1a){
+                id(el_aufnahmeleistung_ww_tag_wh_float) = (float((int((x[6])+( (x[5])<<8))))/1000);
+                id(el_aufnahmeleistung_ww_tag_wh_flag)=true;
+                //ESP_LOGI("main", "el_aufnahmeleistung_ww_tag_kwh received: %f", id(el_aufnahmeleistung_ww_tag_wh_float));
+                }
+              else if (x[4]==0x1e){
+                id(el_aufnahmeleistung_heiz_tag_wh_float) = (float((int((x[6])+( (x[5])<<8))))/1000);
+                id(el_aufnahmeleistung_heiz_tag_wh_flag) = true;
+                //ESP_LOGI("main", "el_aufnahmeleistung_heiz_tag_wh received: %f", id(el_aufnahmeleistung_heiz_tag_wh_float));
+                }
+              else if (x[4]==0x1c){
+                id(el_aufnahmeleistung_ww_total_kWh_float) = (float((int((x[6])+( (x[5])<<8))))/1000);
+                id(el_aufnahmeleistung_ww_total_kWh_flag)=true;
+                //ESP_LOGI("main", "el_aufnahmeleistung_ww_total_kWh received: %f", id(el_aufnahmeleistung_ww_total_kWh_float));
+                }
+              else if (x[4]==0x20){
+                id(el_aufnahmeleistung_heiz_total_kWh_float) = (float((int((x[6])+( (x[5])<<8))))/1000);
+                id(el_aufnahmeleistung_heiz_total_kWh_flag) = true;
+                //ESP_LOGI("main", "el_aufnahmeleistung_heiz_total_kWh received: %f", id(el_aufnahmeleistung_heiz_total_kWh_float));
+                }
+              }
+
+#Elektrische Leistungsaufnahme kWh / MWH
+    - can_id: 0x500 #Original: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0xfa and x[3]==0x09) {
+              if(x[4]==0x1b){
+              id(el_aufnahmeleistung_ww_tag_kwh) =float(int((x[6])+( (x[5])<<8)));
+              id(el_aufnahmeleistung_ww_tag_kwh_flag)=true;
+              //ESP_LOGI("main", "el_aufnahmeleistung_ww_tag_kwh received: %f", id(el_aufnahmeleistung_ww_tag_kwh));
+              }
+              else if(x[4]==0x1f){
+                id(el_aufnahmeleistung_heiz_tag_kwh) =float(int((x[6])+( (x[5])<<8)));
+                id(el_aufnahmeleistung_heiz_tag_kwh_flag)=true;
+                //ESP_LOGI("main", "el_aufnahmeleistung_heiz_tag_kwh received: %f", id(el_aufnahmeleistung_heiz_tag_kwh));
+                }
+              else if(x[4]==0x1d){
+              id(el_aufnahmeleistung_ww_total_mWh) =float(int((x[6])+( (x[5])<<8)));
+              id(el_aufnahmeleistung_ww_total_mWh_flag)=true;
+              //ESP_LOGI("main", "el_aufnahmeleistung_ww_total_mWh received: %f", id(el_aufnahmeleistung_ww_total_mWh));
+              }
+              else if(x[4]==0x21){
+                id(el_aufnahmeleistung_heiz_total_mWh) =float(int((x[6])+( (x[5])<<8)));
+                id(el_aufnahmeleistung_heiz_total_mWh_flag)=true;
+                //ESP_LOGI("main", "el_aufnahmeleistung_heiz_total_mWh received: %f", id(el_aufnahmeleistung_heiz_total_mWh));
+                }
+            }
+
+
+#Wärmeertrag WW/Heizung MWh / kWH
+    - can_id: 0x500 #Original: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0xfa and x[3]==0x09) {
+              if(x[4]==0x25){
+                id(waermemertrag_electr_ww_total_mWh) =float(int((x[6])+( (x[5])<<8)));
+                id(waermemertrag_electr_ww_total_mWh_flag)=true;
+                //ESP_LOGI("main", "waermemertrag_electr_ww_tag_kwh received: %f", id(waermemertrag_electr_ww_total_mWh));
+                }
+              else if(x[4]==0x29){
+                id(waermemertrag_electr_heiz_total_mWh) =float(int((x[6])+( (x[5])<<8)));
+                id(waermemertrag_electr_heiz_total_mWh_flag)=true;
+                //ESP_LOGI("main", "waermemertrag_electr_heiz_tag_kwh received: %f", id(waermemertrag_electr_heiz_total_mWh));
+                }
+              else if(x[4]==0x2b){
+              id(waermemertrag_ww_tag_kwh) =float(int((x[6])+( (x[5])<<8)));
+              id(waermemertrag_ww_tag_kwh_flag)=true;
+              //ESP_LOGI("main", "waermemertrag_ww_tag_kwh received: %f", id(waermemertrag_ww_tag_kwh));
+              }
+              else if(x[4]==0x2d){
+              id(waermemertrag_ww_total_mWh) =float(int((x[6])+( (x[5])<<8)));
+              id(waermemertrag_ww_total_mWh_flag)=true;
+              //ESP_LOGI("main", "waermemertrag_ww_total_mWh received: %f", id(waermemertrag_ww_total_mWh));
+              }
+              else if(x[4]==0x2f){
+                id(waermemertrag_heiz_tag_kwh) =float(int((x[6])+( (x[5])<<8)));
+                id(waermemertrag_heiz_tag_kwh_flag)=true;
+                //ESP_LOGI("main", "waermemertrag_heiz_tag_kwh received: %f", id(waermemertrag_heiz_tag_kwh));
+                }
+              else if(x[4]==0x31){
+                id(waermemertrag_heiz_total_mWh) =float(int((x[6])+( (x[5])<<8)));
+                id(waermemertrag_heiz_total_mWh_flag)=true;
+                //ESP_LOGI("main", "waermemertrag_heiz_total_kWh_float received: %f", id(waermemertrag_heiz_total_mWh));
+                }
+            }
+
+
+#Wärmeertrag WW/Heizung Wh / kWH
+    - can_id: 0x500 #Original: 0x180
+      then:
+        - lambda: |-
+            if(x[0]==id(resp_id_1) and x[1]==id(resp_id_2) and x[2]==0xfa and x[3]==0x09) {
+              if(x[4]==0x24){
+                id(waermemertrag_electr_ww_total_kWh_float) =float(int((x[6])+( (x[5])<<8)))/1000;
+                id(waermemertrag_electr_ww_total_kWh_flag)=true;
+                //ESP_LOGI("main", "waermemertrag_electr_ww_tag_wh_float received: %f", id(waermemertrag_electr_ww_total_kWh_float));
+                }
+              else if(x[4]==0x28){
+                id(waermemertrag_electr_heiz_total_kWh_float) =float(int((x[6])+( (x[5])<<8)))/1000;
+                id(waermemertrag_electr_heiz_total_kWh_flag)=true;
+                //ESP_LOGI("main", "waermemertrag_electr_heiz_tag_wh_float received: %f", id(waermemertrag_electr_heiz_total_kWh_float));
+                }
+              else if(x[4]==0x2a){
+              id(waermemertrag_ww_tag_wh_float) =float(int((x[6])+( (x[5])<<8)))/1000;
+              id(waermemertrag_ww_tag_wh_flag)=true;
+              //ESP_LOGI("main", "waermemertrag_ww_tag_wh_float received: %f", id(waermemertrag_ww_tag_wh_float));
+              }
+              else if(x[4]==0x2c){
+              id(waermemertrag_ww_total_kWh_float) =float(int((x[6])+( (x[5])<<8)))/1000;
+              id(waermemertrag_ww_total_kWh_flag)=true;
+              //ESP_LOGI("main", "waermemertrag_ww_total_kWh_float received: %f", id(waermemertrag_ww_total_kWh_float));
+              }
+              else if(x[4]==0x2e){
+                id(waermemertrag_heiz_tag_wh_float) =float(int((x[6])+( (x[5])<<8)))/1000;
+                id(waermemertrag_heiz_tag_wh_flag)=true;
+                //ESP_LOGI("main", "waermemertrag_heiz_tag_wh_float received: %f", id(waermemertrag_heiz_tag_wh_float));
+                }
+              else if(x[4]==0x30){
+                id(waermemertrag_heiz_total_kWh_float) =float(int((x[6])+( (x[5])<<8)))/1000;
+                id(waermemertrag_heiz_total_kWh_flag)=true;
+                //ESP_LOGI("main", "waermemertrag_heiz_total_kWh_float received: %f", id(waermemertrag_heiz_total_kWh_float));
+                }
+            }
+
+
+#Show data in raw form as hex-values
+    - can_id: 0x180
+      then:
+        - lambda: |-
+              int wert0 = int(x[0]);
+              int wert1 =int(x[1]);
+              int wert2 =int(x[2]);
+              int wert3 =int(x[3]);
+              int wert4 =int(x[4]);
+              int wert5 =int(x[5]);
+              int wert6 =int(x[6]);
+              float wert7 = float(int((x[6])+( (x[5])<<8)));
+              float wert8 = float(int((x[4])+( (x[3])<<8)));
+              ESP_LOGI("canmsg", "RECV;180;%02x %02x %02x %02x %02x %02x %02x", wert0, wert1, wert2, wert3, wert4, wert5, wert6);
+              ////ESP_LOGI("canmsg", "RECV;180 Float: %f", wert7);
+              ////ESP_LOGI("canmsg", "RECV;180 Dez.: %i %i", wert5, wert6);
+              ////ESP_LOGI("main", "Antwort klein von 180 Float: %f", wert8);
+              ////ESP_LOGI("main", "Antwort klein von 180 Dez.: %i %i", wert3, wert4);
+              
+    - can_id: 0x680
+      then:
+        - lambda: |-
+              int wert0 = int(x[0]);
+              int wert1 =int(x[1]);
+              int wert2 =int(x[2]);
+              int wert3 =int(x[3]);
+              int wert4 =int(x[4]);
+              int wert5 =int(x[5]);
+              int wert6 =int(x[6]);
+              float wert7 = float(int((x[6])+( (x[5])<<8)));
+              float wert8 = float(int((x[4])+( (x[3])<<8)));
+              ESP_LOGI("canmsg", "RECV;680;%02x %02x %02x %02x %02x %02x %02x", wert0, wert1, wert2, wert3, wert4, wert5, wert6);
+              ////ESP_LOGI("canmsg", "RECV;680 Float: %f", wert7);
+              ////ESP_LOGI("canmsg", "RECV;680 Dez.: %i %i", wert5, wert6);
+              ////ESP_LOGI("main", "Antwort klein von 680 Float: %f", wert8);
+              ////ESP_LOGI("main", "Antwort klein von 680 Dez.: %i %i", wert3, wert4);
+
+    - can_id: 0x480
+      then:
+        - lambda: |-
+              int wert0 = int(x[0]);
+              int wert1 =int(x[1]);
+              int wert2 =int(x[2]);
+              int wert3 =int(x[3]);
+              int wert4 =int(x[4]);
+              int wert5 =int(x[5]);
+              int wert6 =int(x[6]);
+              float wert7 = float(int((x[6])+( (x[5])<<8)));
+              float wert8 = float(int((x[4])+( (x[3])<<8)));
+              ESP_LOGI("canmsg", "RECV;480;%02x %02x %02x %02x %02x %02x %02x", wert0, wert1, wert2, wert3, wert4, wert5, wert6);
+              ////ESP_LOGI("canmsg", "RECV;480 Float: %f", wert7);
+              ////ESP_LOGI("canmsg", "RECV;480 Dez.: %i %i", wert5, wert6);
+              ////ESP_LOGI("main", "Antwort klein von 480 Float: %f", wert8);
+              ////ESP_LOGI("main", "Antwort klein von 480 Dez.: %i %i", wert3, wert4);
+
+    - can_id: 0x100
+      then:
+        - lambda: |-
+              int wert0 = int(x[0]);
+              int wert1 =int(x[1]);
+              int wert2 =int(x[2]);
+              int wert3 =int(x[3]);
+              int wert4 =int(x[4]);
+              int wert5 =int(x[5]);
+              int wert6 =int(x[6]);
+              float wert7 = float(int((x[6])+( (x[5])<<8)));
+              float wert8 = float(int((x[4])+( (x[3])<<8)));
+              ESP_LOGI("canmsg", "RECV;100;%02x %02x %02x %02x %02x %02x %02x", wert0, wert1, wert2, wert3, wert4, wert5, wert6);
+              ////ESP_LOGI("canmsg", "RECV;100 Float: %f", wert7);
+              ////ESP_LOGI("canmsg", "RECV;100 Dez.: %i %i", wert5, wert6);
+              ////ESP_LOGI("main", "Antwort klein von 100 Float: %f", wert8);
+              ////ESP_LOGI("main", "Antwort klein von 100 Dez.: %i %i", wert3, wert4);
+
+    - can_id: 0x301
+      then:
+        - lambda: |-
+              int wert0 = int(x[0]);
+              int wert1 =int(x[1]);
+              int wert2 =int(x[2]);
+              int wert3 =int(x[3]);
+              int wert4 =int(x[4]);
+              int wert5 =int(x[5]);
+              int wert6 =int(x[6]);
+              float wert7 = float(int((x[6])+( (x[5])<<8)));
+              float wert8 = float(int((x[4])+( (x[3])<<8)));
+              ESP_LOGI("canmsg", "RECV;301;%02x %02x %02x %02x %02x %02x %02x", wert0, wert1, wert2, wert3, wert4, wert5, wert6);
+              ////ESP_LOGI("canmsg", "RECV;301 Float: %f", wert7);
+              ////ESP_LOGI("canmsg", "RECV;301 Dez.: %i %i", wert5, wert6);
+              ////ESP_LOGI("main", "Antwort klein von 301 Float: %f", wert8);
+              ////ESP_LOGI("main", "Antwort klein von 301 Dez.: %i %i", wert3, wert4);
+
+    - can_id: 0x500
+      then:
+        - lambda: |-
+              int wert0 = int(x[0]);
+              int wert1 =int(x[1]);
+              int wert2 =int(x[2]);
+              int wert3 =int(x[3]);
+              int wert4 =int(x[4]);
+              int wert5 =int(x[5]);
+              int wert6 =int(x[6]);
+              float wert7 = float(int((x[6])+( (x[5])<<8)));
+              float wert8 = float(int((x[4])+( (x[3])<<8)));
+              //ESP_LOGI("canmsg", "RECV;500;%02x %02x %02x %02x %02x %02x %02x", wert0, wert1, wert2, wert3, wert4, wert5, wert6);
+              ////ESP_LOGI("canmsg", "RECV;500 Float: %f", wert7);
+              ////ESP_LOGI("canmsg", "RECV;500 Dez.: %i %i", wert5, wert6);
+              ////ESP_LOGI("main", "Antwort klein von 500 Float: %f", wert8);
+              ////ESP_LOGI("main", "Antwort klein von 500 Dez.: %i %i", wert3, wert4);
+
+    - can_id: 0x601
+      then:
+        - lambda: |-
+              int wert0 = int(x[0]);
+              int wert1 =int(x[1]);
+              int wert2 =int(x[2]);
+              int wert3 =int(x[3]);
+              int wert4 =int(x[4]);
+              int wert5 =int(x[5]);
+              int wert6 =int(x[6]);
+              float wert7 = float(int((x[6])+( (x[5])<<8)));
+              float wert8 = float(int((x[4])+( (x[3])<<8)));
+              ESP_LOGI("canmsg", "RECV;601;%02x %02x %02x %02x %02x %02x %02x", wert0, wert1, wert2, wert3, wert4, wert5, wert6);
+              ////ESP_LOGI("canmsg", "RECV;601 Float: %f", wert7);
+              ////ESP_LOGI("canmsg", "RECV;601 Dez.: %i %i", wert5, wert6);
+              ////ESP_LOGI("main", "Antwort klein von 601 Float: %f", wert8);
+              ////ESP_LOGI("main", "Antwort klein von 601 Dez.: %i %i", wert3, wert4);
+
+    - can_id: 0x602
+      then:
+        - lambda: |-
+              int wert0 = int(x[0]);
+              int wert1 =int(x[1]);
+              int wert2 =int(x[2]);
+              int wert3 =int(x[3]);
+              int wert4 =int(x[4]);
+              int wert5 =int(x[5]);
+              int wert6 =int(x[6]);
+              float wert7 = float(int((x[6])+( (x[5])<<8)));
+              float wert8 = float(int((x[4])+( (x[3])<<8)));
+              ESP_LOGI("canmsg", "RECV;602;%02x %02x %02x %02x %02x %02x %02x", wert0, wert1, wert2, wert3, wert4, wert5, wert6);
+              ////ESP_LOGI("canmsg", "RECV;602 Float: %f", wert7);
+              ////ESP_LOGI("canmsg", "RECV;602 Dez.: %i %i", wert5, wert6);
+              ////ESP_LOGI("main", "Antwort klein von 601 Float: %f", wert8);
+              ////ESP_LOGI("main", "Antwort klein von 601 Dez.: %i %i", wert3, wert4);

@@ -12,10 +12,9 @@
 
 MCP_CAN CAN0(5); // Set CS pin
 
-bool canActive = false; // Indicates whether CAN has been set up correctly
-bool mcp2515Connected = false; // If set to false, CAN setup and communications is omitted. (Useful for local development & testing)
+bool canActive = true; // Indicates whether CAN has been set up correctly
+bool mcp2515Connected = true; // If set to false, CAN setup and communications is omitted. (Useful for local development & testing)
 
-char msgString[128]; // Serial Output String Buffer
 byte sendData[] = {0xC1, 0x01, 0x69, 0x00, 0x00, 0x00, 0x00};
 
 const int canMembersToScan[] = {0x180, 0x500, 0x480};
@@ -233,8 +232,8 @@ bool decomposeMsg(byte *msg, const char *memberName, unsigned short *memberId, E
     index->Type = ElsterTable[elsterIndexIndex].Type;
   }
 
-  printCanMsg("DECOMP", msg);
-  ESP_LOGI("DECOMP", "Member.name = %s,\tMember.id = 0x%04x,\tElsterIndex.Name = %s,\tElsterIndex.Index = 0x%04x,\tElsterIndex.Type = %0u,\tMsgType = %d", memberName, (unsigned int)*memberId, index->Name, index->Index, index->Type, *type);
+  //printCanMsg("DECOMP", msg);
+  ESP_LOGI("DECOMP", "M.name = %s,\tM.id = 0x%04x,\tEIndex.Name = %s,\tEIndex.Index = 0x%04x,\tEIndex.Type = %0u,\tMsgType = %d", memberName, (unsigned int)*memberId, index->Name, index->Index, index->Type, *type);
   return retVal;
 }
 
@@ -247,17 +246,15 @@ void receiveCanMsg()
     unsigned long rxId = 0;
     byte len = 0;
     byte rxBuf[8];
+    char msgString[128]; // Serial Output String Buffer
 
     while (CAN_MSGAVAIL == CAN0.checkReceive()) // check if data coming
     {
       CAN0.readMsgBuf(&rxId, &len, rxBuf); // Read data: len = data length, buf = data byte(s)
-      Serial.println("-----------------------------");
       if ((rxId & 0x80000000) == 0x80000000) // Determine if ID is standard (11 bits) or extended (29 bits)
         sprintf(msgString, "Extended ID: 0x%.8lX  DLC: %1d  Data:", (rxId & 0x1FFFFFFF), len);
       else
         sprintf(msgString, "Standard ID: 0x%.3lX       DLC: %1d  Data:", rxId, len);
-
-      //ESP_LOGI("CAN", msgString);
 
       if ((rxId & 0x40000000) == 0x40000000)
       { // Determine if message is a remote request frame.
@@ -268,15 +265,16 @@ void receiveCanMsg()
         //{
         //  sprintf(msgString, " 0x%.2X", rxBuf[i]);
         //}
-        printCanMsg("DECOMP", rxBuf);
+        //printCanMsg("RECV", rxBuf);
         canMember member;
         member.id = 0xffff;
-        member.name = "DummyMember";
+        member.name = "DummyM";
         ElsterIndex index;
         index.Index = 0xaaaa;
         index.Name = "DummyIndex";
         index.Type = et_err_nr;
         msgType type = t_systemRespond;
+        ESP_LOGI("RECV", "Sender ID: 0x%.3lX", rxId);
         decomposeMsg(rxBuf, member.name, &member.id, &index, &type);
       }
     }

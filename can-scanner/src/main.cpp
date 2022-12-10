@@ -6,9 +6,24 @@
 #include "inc/ElsterTable.inc"
 #include "esp_log.h"
 #include "CanMembers.h"
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+
+
 
 #define SENDER_ID 0x700
 #define SEND_FREQ 2000 // The wait time between sending two messages
+
+char* ssid = "Airport";
+char* password = "Schwarzwald1";
+const char* mqtt_server = "192.168.0.201";
+int mqtt_port = 1883;
+const char* mqtt_endpoint = "home/heating/canmessages";
+const char* mqtt_subscription = "home/heating/control";
+
+WiFiClient* wifi_client;
+PubSubClient* mqtt_client;
 
 MCP_CAN CAN0(5); // Set CS pin
 
@@ -25,6 +40,85 @@ const int elsterTableSize = 3610;
 
 unsigned long last_send = 0;
 
+
+void setupWIFI() {
+
+  ESP_LOGI("WIFI", "Connecting to WiFi '%s'", ssid);
+
+	WiFi.begin(ssid, password);
+
+	WiFi.status();
+	while (WiFi.status() != WL_CONNECTED) {
+		delay(500);
+		ESP_LOGI("WIFI", "%d", WiFi.status());
+	}
+	ESP_LOGI("WIFI", "Connected to WiFi '%s' with IP %s", ssid, WiFi.localIP().toString().c_str());
+}
+
+void loopWIFI()
+{
+	if (WiFi.status() != WL_CONNECTED) {
+		ESP_LOGI("WIFI", "Connection seems to be missing, Starting WiFi Setup");
+		setupWIFI();
+	}
+}
+
+
+void processMessage(char* topic, byte* payload, unsigned int length) {
+	ESP_LOGI("MQTT", 
+  	"Message arrived: Topic: %s, Length: %d, Payload: [%s]",
+		topic, length, payload
+		);
+
+	//controlValves((char*) payload);
+}
+
+
+void reconnectMQTT() {
+  	// Loop until we're reconnected
+  	while (!mqtt_client->connected()) {
+    ESP_LOGI("MQTT", "Attempting MQTT connection...");
+    // Create a random client ID
+    String clientId = "ESP8266Client-";
+    clientId += String(random(0xffff), HEX);
+    // Attempt to connect
+    if (mqtt_client->connect(clientId.c_str())) {
+      ESP_LOGI("MQTT", "connected");
+      // Once connected, publish an announcement...
+      mqtt_client->publish(mqtt_endpoint, "hello world");
+      // ... and resubscribe
+      mqtt_client->subscribe(mqtt_subscription);
+    } else {
+      ESP_LOGI("MQTT", "failed, rc=");
+      Serial.print(mqtt_client->state());
+      ESP_LOGI("MQTT", " try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+	return;
+}
+
+void setupMQTT() {
+
+	wifi_client = new WiFiClient();
+	mqtt_client = new PubSubClient(*wifi_client);
+	mqtt_client->setServer(mqtt_server, mqtt_port);
+	mqtt_client->setCallback(processMessage);
+	reconnectMQTT();
+
+}
+
+
+void loopMQTT() {
+	// Check connection status
+	if (!mqtt_client->connected()) {
+		ESP_LOGI("MQTT", "No Connection. Trying to establish new connection.");
+		reconnectMQTT();
+	}
+	mqtt_client->loop();
+}
+
 void setup()
 {
 
@@ -39,6 +133,9 @@ void setup()
 
 
   Serial.begin(115200);
+  
+  setupWIFI();
+  setupMQTT();
   
   delay(3000);
 
@@ -144,10 +241,10 @@ void sendCanMsg(byte *msg)
   return;
 }
 
-// Returns the index of KnownCanMembers if the CAN ID is a known. Returns 0 if the CAN ID is not known.
+// Returns the index of KnownCanMembers if the CAN ID is a known. Returns -1 if the CAN ID is not known.
 int lookupCanID(unsigned short id)
 {
-  int retVal = 0;
+  int retVal = -1;
   for(int i = 0; i < KnownCanMembersCount; i++)
   {
     if(id == KnownCanMembers[i].id)
@@ -206,9 +303,11 @@ bool decomposeMsg(byte *msg, const char *memberName, unsigned short *memberId, E
 
   // Determine canMember Name
   int knownCanMembersIndex = lookupCanID(*memberId);
-  if(knownCanMembersIndex)
+  if(knownCanMembersIndex != -1)
   {
     memberName = KnownCanMembers[knownCanMembersIndex].name;
+  } else {
+    memberName = "MemberNotFound";
   }
 
   // Determine Message Type
@@ -224,7 +323,7 @@ bool decomposeMsg(byte *msg, const char *memberName, unsigned short *memberId, E
     index->Index = msg[2];
   }
 
-  // Determine ElterIndex Name & Type
+  // Determine ElsterIndex Name & Type
   int elsterIndexIndex = lookupElsterIndex(index->Index);
   if(elsterIndexIndex)
   {
@@ -276,6 +375,21 @@ void receiveCanMsg()
         msgType type = t_systemRespond;
         ESP_LOGI("RECV", "Sender ID: 0x%.3lX", rxId);
         decomposeMsg(rxBuf, member.name, &member.id, &index, &type);
+
+        //build JSON based on Message
+        StaticJsonDocument<200> jsonMsg;
+        jsonMsg["canSenderId"] = member.id;
+        jsonMsg["canSenderName"] = member.name;
+        jsonMsg["elsterIndex"] = index.Index;
+        jsonMsg["elsterIndexName"] = index.Name;
+        jsonMsg["elsterIndexType"] = index.Type;
+        jsonMsg["messageType"] = type;
+
+        // send received CAN message via MQTT to the Broker
+        char serializedJsonMsg[200];
+        serializeJson(jsonMsg, serializedJsonMsg, 200);
+        mqtt_client->publish(mqtt_endpoint, serializedJsonMsg);
+
       }
     }
     return;
@@ -288,6 +402,10 @@ void receiveCanMsg()
 
 void loop()
 {
+  loopWIFI();
+  loopMQTT();
+
+
   receiveCanMsg();
   if (millis() > last_send + SEND_FREQ)
   {

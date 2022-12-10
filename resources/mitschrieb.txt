@@ -1,0 +1,41 @@
+received can message (#1) std can_id=0x180 size=7
+--> Wird aufgelöst
+--> Boiler
+received can message (#3) std can_id=0x480 size=7
+--> Wird aufgelöst
+--> WPM2
+received can message (#4) std can_id=0x500 size=7
+--> Wird nicht aufgelöst
+--> Heating Module
+received can message (#1) std can_id=0x601 size=7
+--> Wird nicht aufgelöst
+--> Mischer Modul 1
+received can message (#1) std can_id=0x602 size=7
+--> Wird nicht aufgelöst
+--> Mischer Modul 1
+
+
+[20:25:52][D][canbus:033]: send extended id=0x680 rtr=FALSE size=7
+
+
+
+- CAN Id (von robots, haustechnikdialog):
+CAN Id  Request       Module
+  000 - 0x00, 0x00 -  direkt
+  180 - 0x31, 0x00 -  Kessel
+  280 - 0x51, 0x00 -  atez
+  300 - 0x61, 0x00 -  Bedienmodul
+  301 - 0x61, 0x01 -  Bedienmodul
+  302 - 0x61, 0x02 -  Bedienmodul
+  303 - 0x61, 0x03 -  Bedienmodul
+  400 - 0x81, 0x00 -  Raumfernfühler
+  480 - 0x91, 0x00 -  Manager
+  500 - 0xA1, 0x00 -  Heizmodul
+  580 - 0xB1, 0x00 -  Buskoppler
+  600 - 0xC1, 0x00 -  Mischermodule
+  601 - 0xC1, 0x01 -  Mischermodule 
+  602 - 0xC1, 0x02 -  Mischermodule 
+  603 - 0xC1, 0x03 -  Mischermodule 
+  680 - 0xD1, 0x00 -  PC (ComfortSoft)
+  700 - 0xE1, 0x00 -  Fremdgerä¤t
+  780 - 0xF1, 0x00 -  DCF-Modul

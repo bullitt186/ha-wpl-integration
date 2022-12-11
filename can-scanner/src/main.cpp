@@ -15,12 +15,13 @@
 #define SENDER_ID 0x700
 #define SEND_FREQ 2000 // The wait time between sending two messages
 
-char* ssid = "Airport";
-char* password = "Schwarzwald1";
+const char* ssid = "Airport";
+const char* password = "Schwarzwald1";
 const char* mqtt_server = "192.168.0.201";
-int mqtt_port = 1883;
 const char* mqtt_endpoint = "home/heating/canmessages";
 const char* mqtt_subscription = "home/heating/control";
+int mqtt_port = 1883;
+
 
 WiFiClient* wifi_client;
 PubSubClient* mqtt_client;
@@ -36,11 +37,14 @@ const int canMembersToScan[] = {0x180, 0x500, 0x480};
 const int canMembersToScanCount = 3;
 
 const int elsterTableSize = 3610;
-//const int elsterTableSize = 4;
 
 unsigned long last_send = 0;
 
 
+
+/**
+  Sets up the WiFi Connection.
+*/
 void setupWIFI() {
 
   ESP_LOGI("WIFI", "Connecting to WiFi '%s'", ssid);
@@ -55,6 +59,11 @@ void setupWIFI() {
 	ESP_LOGI("WIFI", "Connected to WiFi '%s' with IP %s", ssid, WiFi.localIP().toString().c_str());
 }
 
+
+
+/**
+  Needs to be executed regularly (e.g. in every loop) and checks whether WiFi is still connected. If not, it reconnects.
+*/
 void loopWIFI()
 {
 	if (WiFi.status() != WL_CONNECTED) {
@@ -64,6 +73,14 @@ void loopWIFI()
 }
 
 
+
+/**
+  Callback Method to handle incoming MQTT Messages
+
+  @param topic the MQTT topic under which the message was received
+  @param payload the payload of the received MQTT message
+  @param length the length of the payload
+*/
 void processMessage(char* topic, byte* payload, unsigned int length) {
 	ESP_LOGI("MQTT", 
   	"Message arrived: Topic: %s, Length: %d, Payload: [%s]",
@@ -74,9 +91,13 @@ void processMessage(char* topic, byte* payload, unsigned int length) {
 }
 
 
+
+/**
+  (Re)connects to the MQTT-Broker. 
+*/
 void reconnectMQTT() {
-  	// Loop until we're reconnected
-  	while (!mqtt_client->connected()) {
+  // Loop until we're reconnected
+  while (!mqtt_client->connected()) {
     ESP_LOGI("MQTT", "Attempting MQTT connection...");
     // Create a random client ID
     String clientId = "ESP8266Client-";
@@ -99,6 +120,11 @@ void reconnectMQTT() {
 	return;
 }
 
+
+
+/**
+  Handles the initial setup of the MQTT connection
+*/
 void setupMQTT() {
 
 	wifi_client = new WiFiClient();
@@ -110,6 +136,10 @@ void setupMQTT() {
 }
 
 
+
+/**
+  Needs to be executed regularly (e.g. in every loop) and checks whether MQTT is still connected. If not, it reconnects.
+*/
 void loopMQTT() {
 	// Check connection status
 	if (!mqtt_client->connected()) {
@@ -119,6 +149,11 @@ void loopMQTT() {
 	mqtt_client->loop();
 }
 
+
+
+/**
+  The Main setup method of the Arduino Sketch
+*/
 void setup()
 {
 
@@ -167,6 +202,16 @@ void setup()
 
 }
 
+
+
+/**
+  Translates a given CAN-ID to the corresponding two bytes as specified here:
+  http://juerg5524.ch/data/Telegramm-Aufbau.txt
+
+  @param id the CAN-ID to convert.
+  @param byte0 a pointer to the first byte which shall contain the converted CAN-ID 
+  @param byte1 a pointer to the second byte which shall contain the converted CAN-ID 
+*/
 void canIdToBytes(unsigned short id, msgType type, byte *byte0, byte *byte1)
 { 
   // nulle die letzten 4 bit der id
@@ -186,6 +231,19 @@ void canIdToBytes(unsigned short id, msgType type, byte *byte0, byte *byte1)
   return;
 }
 
+
+
+/**
+  Translates a given Index of an Elster Message to the corresponding two bytes as specified here:
+  http://juerg5524.ch/data/Telegramm-Aufbau.txt
+ 
+
+  @param index the CAN-ID to convert.
+  @param byte0 a pointer to the first byte which shall contain the converted Index 
+  @param byte1 a pointer to the second byte which shall contain the converted Index
+  @param byte2 a pointer to the third byte which shall contain the converted Index
+
+*/
 void indexToBytes(unsigned short index, byte *byte0, byte *byte1, byte *byte2)
 {
   //An der 3. Stelle steht nicht notwendigerweise "fa" ("ERWEITERUNGSTELEGRAMM" siehe Elster-Tabelle). Wenn ein Elster-Index 2-stellig ist, also kleiner oder gleich ff ist, dann darf der Index dort direkt eingesetzt werden. Das Resultat erhält man dann im 4. und 5. Byte. 
@@ -206,13 +264,33 @@ void indexToBytes(unsigned short index, byte *byte0, byte *byte1, byte *byte2)
   return;
 }
 
+
+
+/**
+  Takes a given Byte-Array of 7 bytes and prints it in raw Hex Values.
+  (Useful for debugging)
+
+  @param tag the Tag to use for the logging function
+  @param msg a pointer to a 7-byte array, containing the message
+
+*/
 void printCanMsg(const char* tag, byte *msg)
 {
       ESP_LOGI(tag, "%02x %02x %02x %02x %02x %02x %02x", msg[0], msg[1], msg[2], msg[3], msg[4], msg[5], msg[6]);
 }
 
+
+
+/**
+  Takes a pointer to a Byte-Array of 7 bytes and sends it on the CAN.
+
+  @param msg a pointer to a 7-byte array, containing the message
+
+*/
 void sendCanMsg(byte *msg)
 {
+  // TODO: Check if the message is really 7 bytes big
+  // TODO: Implement reasonable return codes
   if(canActive)
   {
     // send data:  ID = SENDER_ID, Standard CAN Frame, Data length = 7 bytes, 'msg' = array of data bytes to send
@@ -241,7 +319,15 @@ void sendCanMsg(byte *msg)
   return;
 }
 
-// Returns the index of KnownCanMembers if the CAN ID is a known. Returns -1 if the CAN ID is not known.
+
+
+/**
+  Returns the index of KnownCanMembers if the CAN ID is a known. 
+
+  @param msg a pointer to a 7-byte array, containing the message
+  @return -1 if the CAN ID is not known, the identified CAN-ID otherwise.
+
+*/
 int lookupCanID(unsigned short id)
 {
   int retVal = -1;
@@ -256,9 +342,18 @@ int lookupCanID(unsigned short id)
   return retVal;
 }
 
-// Returns the index (position) within the ElsterTable if the given ElsterIndex is found. Returns 0 if the ElsterIndex is not found.
+
+
+/**
+  Returns the index (position) within the ElsterTable if the given ElsterIndex is found.
+
+  @param msg a pointer to a 7-byte array, containing the message
+  @return 0 if the ElsterIndex is not found, the identified index otherwise
+
+*/
 int lookupElsterIndex(unsigned short index)
 {
+  // TODO: Not Found Return Code auf -1 ändern.
   int retVal = 0;
   for(int i = 0; i < elsterTableSize; i++)
   {
@@ -271,6 +366,17 @@ int lookupElsterIndex(unsigned short index)
   return retVal;
 }
 
+
+
+/**
+  Scans for available CAN-Members and for which messages they react to by iterating over all given CAN members.
+  It requests messages for all messages defined in the Elster Table.
+  This can take a while, since <CAN-Members> x <Elster Messages> are sent in total.
+
+  @param members[] an Array of canMember, containing the members, for which shall be scanned.
+  @param membersCount the amount of members in the Array.
+
+*/
 void scan(canMember members[], int membersCount)
 {
   for(int i = 0; i < membersCount; i++)
@@ -293,7 +399,18 @@ void scan(canMember members[], int membersCount)
 }
 
 
-//ToDo Test this Function
+
+/**
+  Takes a CAN message and decomposes it into individual data fields.
+
+  @param msg Pointer to an Array of at least 7 bytes, containing the CAN Message.
+  @param membername Pointer to a Char-Array, where the resolved CAN Member Name of the sender will be written to.
+  @param memberID Pointer to an unsigned short, where the resolved CAN Member ID will be written to.
+  @param index Pointer to an ElsterIndex, which will be filled based on the found data in the message
+  @param type Pointer to a msgType where the identified message type will be written to.
+  @return true if the message was decomposed successfully, false otherwise.
+  
+*/
 bool decomposeMsg(byte *msg, const char *memberName, unsigned short *memberId, ElsterIndex *index, msgType *type)
 {
   bool retVal = false;
@@ -337,7 +454,9 @@ bool decomposeMsg(byte *msg, const char *memberName, unsigned short *memberId, E
 }
 
 
-
+/**
+  If there is a CAN message availabe, it is received, decomposed and sent to the specified MQTT broker as a JSON.  
+*/
 void receiveCanMsg()
 {
   if(canActive)
@@ -399,7 +518,9 @@ void receiveCanMsg()
 
 
 
-
+/**
+  The Main Loop of the Arduino Sketch
+*/
 void loop()
 {
   loopWIFI();
